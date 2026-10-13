@@ -83,7 +83,8 @@ async function send({to, subject, text}) {
 const ACTIONS = {leads, audit, email, send};
 module.exports = async (req, res) => {
   const b = req.body || {};
-  if (!E.APP_PASSWORD || b.pw !== E.APP_PASSWORD) return res.status(401).json({error:'Password galat hai (ya APP_PASSWORD set nahi)'});
+  if (!E.APP_PASSWORD) return res.status(500).json({error:'Password setup: APP_PASSWORD Vercel mein set nahi hai. Add karke Redeploy karo'});
+if (String(b.pw || '').trim() !== E.APP_PASSWORD.trim()) return res.status(401).json({error:'Password galat hai, wohi daalo jo Vercel mein APP_PASSWORD mein likha hai'}); 
   try { res.json(await ACTIONS[b.action](b)); }
   catch (e) { res.status(500).json({error:String(e.message || e)}); }
 };
