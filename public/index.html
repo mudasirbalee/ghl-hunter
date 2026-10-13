@@ -1,0 +1,71 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GHL Client Hunter</title>
+<style>
+body{font:14px system-ui,sans-serif;max-width:1000px;margin:auto;padding:16px;background:#f6f7f9;color:#111}
+.bar,.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px;margin-bottom:12px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select,textarea,button{font:inherit;padding:7px;border:1px solid #bbb;border-radius:6px}
+textarea{width:100%;box-sizing:border-box;min-height:150px}
+button{cursor:pointer;background:#111;color:#fff;border:0}button.g{background:#e8e8e8;color:#111}
+#log{font:12px monospace;white-space:pre-wrap;max-height:160px;overflow:auto;background:#111;color:#9f9;padding:8px;border-radius:8px}
+.s{display:inline-block;background:#e6f4ea;border-radius:12px;padding:2px 9px;font-weight:600}
+.row{display:flex;gap:8px;margin:6px 0}.row input{flex:1}
+</style></head><body>
+<h2>GHL Client Hunter</h2>
+<div class="bar">
+<input id="pw" type="password" placeholder="Password" size="12">
+<select id="country"><option>US</option><option>UK</option><option>AU</option></select>
+<select id="niche"><option>hvac</option><option>roofing</option><option>landscaping</option><option>dentist</option><option>gym</option><option>lawyer</option><option>realestate</option><option>salon</option></select>
+<input id="limit" type="number" value="10" min="1" max="50" style="width:60px" title="kitni leads">
+<button onclick="start()">Leads dhoondo</button><button class="g" onclick="stopped=true">Stop</button>
+<button class="g" onclick="sendAll()">Sab pending bhejo (1/min)</button><button class="g" onclick="csv()">CSV download</button>
+</div>
+<div id="log">Tayyar. Password daalo aur "Leads dhoondo" dabao.</div><br>
+<div id="list"></div>
+<script>
+let L=JSON.parse(localStorage.gh_leads||'[]'),stopped=false;
+const $=i=>document.getElementById(i),save=()=>localStorage.gh_leads=JSON.stringify(L);
+$('pw').value=localStorage.gh_pw||'';$('pw').onchange=()=>localStorage.gh_pw=$('pw').value;
+const log=m=>{$('log').textContent+='\n'+m;$('log').scrollTop=1e9},sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(action,d){const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...d,action,pw:$('pw').value})});const j=await r.json();if(!r.ok)throw new Error(j.error);return j}
+async function start(){
+ stopped=false;const country=$('country').value,niche=$('niche').value,limit=+$('limit').value;
+ const seen=new Set(L.map(l=>l.website));let found=0,idx=0;
+ while(found<limit&&!stopped&&idx<8){
+  log(`[1/3] Shehar #${idx+1} mein ${niche} dhoond raha hoon...`);
+  let r;try{r=await api('leads',{country,niche,cityIdx:idx})}catch(e){log('✗ '+e.message);if(/Password/.test(e.message))return;idx++;continue}
+  const fresh=r.leads.filter(l=>!seen.has(l.website));fresh.forEach(l=>seen.add(l.website));
+  log(`${r.city}: ${fresh.length} nayi websites, audit ho rahi hain...`);
+  for(let i=0;i<fresh.length&&found<limit&&!stopped;i+=4){
+   const res=await Promise.all(fresh.slice(i,i+4).map(l=>api('audit',{lead:l}).catch(()=>({lead:null}))));
+   for(const{lead}of res){
+    if(!lead||lead.score<6||!lead.email||found>=limit)continue;
+    const e=await api('email',{lead}).catch(x=>({subject:'',d1:'',note:x.message}));
+    if(!e.ai)log('⚠ AI email fail ('+e.note+'), template use hua');
+    L.unshift({...lead,...e,status:''});found++;save();render();log(`✔ ${lead.business} (score ${lead.score})`);
+   }
+  }
+  if(!r.more)break;idx++;
+ }
+ log(`Ho gaya: ${found} nayi leads mili.`);
+}
+function render(){$('list').innerHTML=L.map((l,i)=>`<div class="card"><b>${esc(l.business)}</b> · ${esc(l.city)}, ${esc(l.country)} <span class="s">${l.score}/10</span> ${l.status?'<b>'+esc(l.status)+'</b>':''}
+<br><a href="${esc(l.website)}" target="_blank">${esc(l.website)}</a><br><small>${esc(l.pains)}</small>
+<div class="row"><input value="${esc(l.email)}" oninput="L[${i}].email=this.value;save()"><input value="${esc(l.subject)}" oninput="L[${i}].subject=this.value;save()"></div>
+<textarea oninput="L[${i}].d1=this.value;save()">${esc(l.d1)}</textarea>
+<details><summary>Follow-ups (Day 3, 7, 14)</summary><pre style="white-space:pre-wrap">${esc(l.d3)}\n\n---\n${esc(l.d7)}\n\n---\n${esc(l.d14)}</pre></details>
+<button onclick="sendOne(${i})">Bhejo</button> <button class="g" onclick="L.splice(${i},1);save();render()">Delete</button></div>`).join('')}
+const today=()=>'gh_sent_'+new Date().toISOString().slice(0,10);
+async function sendOne(i){
+ const n=+localStorage[today()]||0;if(n>=30)return alert('Aaj ke 30 emails ho gaye. Kal bhejo, domain safe rakho.');
+ const l=L[i];if(l.status==='sent'||!l.email)return;
+ try{await api('send',{to:l.email,subject:l.subject,text:l.d1});l.status='sent';localStorage[today()]=n+1;log('📧 sent → '+l.business)}catch(e){l.status='error';log('✗ '+e.message)}
+ save();render();
+}
+async function sendAll(){stopped=false;if(!confirm('Pending sab emails 1/min ki raftar se jayengi (max 30/din). Page khula rakhna. Theek hai?'))return;
+ for(let i=0;i<L.length&&!stopped;i++){if(L[i].status)continue;await sendOne(i);await sleep(60000)}log('Bhejna khatam.')}
+function csv(){const k=['business','city','country','niche','website','email','phone','score','pains','subject','d1','d3','d7','d14','status'];
+ const t=[k.join(',')].concat(L.map(l=>k.map(c=>'"'+String(l[c]??'').replace(/"/g,'""')+'"').join(','))).join('\n');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+t],{type:'text/csv'}));a.download='leads.csv';a.click()}
+render();
+</script></body></html>
